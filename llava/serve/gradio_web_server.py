@@ -7,12 +7,97 @@ import time
 import gradio as gr
 import requests
 
+from fastapi import FastAPI, Request
 from llava.conversation import (default_conversation, conv_templates,
                                 SeparatorStyle)
 from llava.constants import LOGDIR
 from llava.utils import (build_logger, server_error_msg,
                          violates_moderation, moderation_msg)
 import hashlib
+
+PROMPT_MATERIAL = "Question:  What is the main material used for this product which description is {description} ?\r\n\r\n" \
+                  "Candidate material list: [Acrylic,Altay Velvet,Aluminium,Aluminium Alloy,Aluminum,Bamboo," \
+                  "Bonded Leather,Bone,Boucle,brass,Bronzing cloth,Bronzing suede,Canvas,Carbon fiber," \
+                  "Carbon steel,Ceramic,Chenille,Chrome,Clay,Concrete,Corduroy,Cotton,Cotton Linen,Crystal," \
+                  "Down filling,Epoxy resin adhesive,EPU,Eucalyptus,Fabric,faux fur,Fiberglass,Fireclay,Foam," \
+                  "genuine leather,Glass,HDPE,Horse hair leather,Iron,Kaolinite,Leather,Linen,Maple,marble,MDF," \
+                  "Melamine,Metal,Metal &amp; Wood,Microfiber,Nubuck,Nylon,Nylon Mesh,oxford fabric," \
+                  "Palomino Fabric,Particle Board,PC,PET,Pine,Plastic,Plush,Plywood,Polyester,POLYETHYLENE," \
+                  "Polypropylene,Polyresin,Polyurethane,POLYVINYL CHLORIDE,PU,PU Leather,PVC,Quartz,Rattan,Resin," \
+                  "Rubber,Rubberwood,Sintered Stone,Snowflake Velvet Fabric,Solid Surface,Stainless Steel,Steel," \
+                  "Stone,Suede,Tech cloth,technical leather,Textile,Textilene,Upholstered,Velvet,Vinyl,Wicker," \
+                  "Solid Wood,Wool,zinc,Olefin,Jute,Viscose,Fiberboard,Paper,Crinkle Oil Paper,Shantung,Parchment," \
+                  "Silk,Burlap,Pongee Silk,Taffeta,Dupioni,Grass Cloth,Tissue Shantung,Broadcloth Pleat,Soy wax," \
+                  "Recycled paper,Engineered Wood,Water Hyacinth,Porcelain,Woven Rope,Paper Rope,Terrazzo," \
+                  "Paper Composite,Copper,Acacia Wood,Magnesium Oxide,Tempered Glass,Microsuede,Fur,Mohair," \
+                  "Sheet Metal,Cement,Wood,Sherpa,Polyester Blend,TPU,Engineered Stone,Faux Leather,Cat Scratch " \
+                  "Fabric,Teddy,LVL,Fleece,Artificial Marble,Mirror,Synthetic Wood,Mesh,Waterproof Fabric," \
+                  "ABS] \r\n\r\n" \
+                  "Based on the function, intended use of this object, please analyze the most matching main " \
+                  "material and select from the candidate list. You may infer from materials commonly used for " \
+                  "similar function objects.\r\n\r\n" \
+                  "Answer:\r\n\r\n" \
+                  "Return result with follow JSON format {\"material\":XXXX}"
+
+PROMPT_COLOR = "Question: What is the main color of this product which description is {description} ? \r\n\r\n" \
+               "Based on the image, please judge the predominant, obvious main color of this product. Reply " \
+               "with specific color terms like red,blue, etc. rather than descriptions like " \
+               "vibrant or dull." \
+               "If there are multiple colors, choose the color with the largest area proportion.\r\n\r\n" \
+               "Answer: \r\n\r\n" \
+               "Explanation: Briefly explain why you judged this to be the main color, e.g. it occupies the " \
+               "largest area percentage.Return with follow JSON format {\"color\":XXXX}"
+
+PROMPT_STYLE = "Question: What is the style of this product?\r\n\r\n" \
+               "Candidate style list: [American Design,American Traditional,Antique,Art Deco,Artsy,Beach,Boho," \
+               "British,Casual,Chinese,Classic,Coastal,Contemporary,Cute,Desert Lodge,European,Exotic," \
+               "Farmhouse,French,French Country,Glam,Grunge,Industrial,Lodge,Luxury,Mid-Century Modern," \
+               "Minimalist,Mission,mix match,Modern,Mountain Lodge,Nautical,Ornate Traditional,Pastoral," \
+               "Primitivism,Retro,Rustic,Scandinavian,Shabby Chic,Southwestern,Sporty,Traditional,Transitional," \
+               "Tropical,Ultra-Modern,Victorian,Vintage,Wild Style]\r\n\r\n" \
+               "Answer:  \r\n\r\n" \
+               "Based on the image, please judge the most likely style for this product. Return with follow " \
+               "JSON format {\"style\":XXXX}"
+
+PROMPT_CATALOG = "Question: What category does this product belong to which description is {description} ?\r\n\r\n " \
+                 "Candidate categories: Pens & Hutches, Trees & Condos, Grooming, Pet Beds & Furniture, Kids Bikes & " \
+                 "Riding Toys, Rockers, Swing Sets, Outdoor Sports, Kids Kitchen Playsets, Kids Slides, Soft " \
+                 "Play, Beds/Frames & Bases, Benches/Stools, Nightstands, Makeup Vanities, Jewelry " \
+                 "Storage, Daybeds, Bedroom Sets, Bedroom " \
+                 "Storage, Dressers/Chests/Wardrobes, Sofas, Tables, Chairs/Accent Seating, Bean Bag Chairs/Lazy Sofa " \
+                 "Chair, TV/Entertainment Furniture, Indoor Fireplaces, Storage Benches, Trash " \
+                 "Cans, Sectionals, Loveseats, Recliners/Massage Chairs, Rocking Chairs, Cabinets, Ottomans, Coat " \
+                 "Racks, Display/Shelving/Etageres, Office Chairs, File Cabinets/Storage Cabinets, Desks/Work " \
+                 "Surfaces, Safes, Seating for Dining, Kitchen Islands & Carts, Dining and Kitchen Sets, Dining " \
+                 "Tables, Servers/Sideboards/Buffets, Table Benches, Youth/Kids/Baby Furniture, Game " \
+                 "Tables, Seating/Chairs, Massage Tables, Parts, Mobile Scooters, Winches, Car Roof Tents, Hand Trucks & " \
+                 "Dollies, Automotive Interior Coolers, Car Jacks, Vibration Platforms, Elliptical Trainers, Inversion " \
+                 "Equipment, Rowers, Trampolines, Step Machines, Treadmills, Exercise Bikes, Fishing Kayaks, Weight " \
+                 "Benches, Water sports, Weight Racks, Other Exercise Equipment, Outdoor Bikes, Skateboards, Table " \
+                 "Tennis Tables, Gym Mats, Basketball Hoops, Golf Bag Carts, Golf Sets, Inflatable Paddle Boards, Kick " \
+                 "Scooters, Soccer Tables, Pool Tables, Christmas Trees, Bathroom Mirrors, Full Length " \
+                 "Mirrors, Clocks, Accessories, Rugs, Wall Art, Flowers & Plants, Mattresses, Blankets & Pillows, Bedding " \
+                 "Sets, Sheets & Pillowcases, Mattress Protectors, Comforters, Curtains, Privacy Screens, Wine " \
+                 "Cellars, Ice Makers, Refrigerators, Kitchen Sinks, Dish Drying Racks, Spice Racks, Kitchen " \
+                 "Faucets, Food Sanitizer, Wine Racks, Espresso Machines, Accessories, Dishwashers, Kitchen Range " \
+                 "Hoods, Cooktops, Dryers, Bathtubs, Shower Doors, Vanity Sinks, Toilets & Bidets, Saunas, Bathroom Sink " \
+                 "Faucets, Freestanding Tub Faucets, Bathroom Storage, Bathroom Accessories, Heat Press Machines, Air " \
+                 "Compressors, Display Freezers & Refrigerators, Beauty & Personal Care, Water Fountains, Patio " \
+                 "Seating, Patio Furniture Sets, Outdoor Tables, Fences, Umbrellas & Shades, Carports, Outdoor " \
+                 "Heating, Grills and Smokers, Garden Carts, Garden Pots & Planters, Garden Arch & Trellis, Pools, Weed " \
+                 "Barrier Fabric, Outdoor Generators & Portable Power, Accessories, Vacuums & Floor Cleaning " \
+                 "Machines, Air Conditioners, Fans, Home Cleaning, Dryers, Dehumidifiers, Ovens, Office Electronics, Soft " \
+                 "Case, Hard Case, Backpacks, Other, Audio Accessories & Musical Instruments, Ventilation Fans, Wire " \
+                 "Fencing, Ladders, Tool Boxes, Tool Cabinets, Snow Removal Tools, Skid Steer Auger Drives & " \
+                 "Bits, Power & Pneumatic Tools, Blowers, Wall Treatment & Supplies, Doors & Door Hardware, Dining " \
+                 "Room Lighting, Bathroom Lighting, Lighting/Lamps, Living Room Lighting, Bedroom Lighting, Outdoor " \
+                 "Lighting, Lighting Accessories \r\n\r\n" \
+                 "Please judge the category this product image belongs to, and select the result from the " \
+                 "candidate categories above.\r\n\r\n" \
+                 "Answer:  \r\n\r\n" \
+                 "Explanation: Briefly explain the reasoning behind your judged category, e.g. the product's " \
+                 "function, shape, materials etc. that are characteristic for that category.Return with follow " \
+                 "JSON format {\"category\":XXXX}"
 
 logger = build_logger("gradio_web_server", "gradio_web_server.log")
 
@@ -26,7 +111,6 @@ priority = {
     "vicuna-13b": "aaaaaaa",
     "koala-13b": "aaaaaab",
 }
-
 
 def get_conv_log_filename():
     t = datetime.datetime.now()
@@ -203,11 +287,7 @@ def http_bot(state, model_selector, temperature, top_p, max_new_tokens, request:
         state = new_state
 
     # Query worker address
-    controller_url = args.controller_url
-    ret = requests.post(controller_url + "/get_worker_address",
-                        json={"model": model_name})
-    worker_addr = ret.json()["address"]
-    logger.info(f"model_name: {model_name}, worker_addr: {worker_addr}")
+    worker_addr = get_worker_addr(model_name)
 
     # No available worker
     if worker_addr == "":
@@ -237,9 +317,10 @@ def http_bot(state, model_selector, temperature, top_p, max_new_tokens, request:
         "stop": state.sep if state.sep_style in [SeparatorStyle.SINGLE, SeparatorStyle.MPT] else state.sep2,
         "images": f'List of {len(state.get_images())} images: {all_image_hash}',
     }
-    logger.info(f"==== request ====\n{pload}")
 
     pload['images'] = state.get_images()
+
+    logger.info(f"==== request ====\n{pload}")
 
     state.messages[-1][-1] = "▌"
     yield (state, state.to_gradio_chatbot()) + (disable_btn,) * 5
@@ -283,8 +364,18 @@ def http_bot(state, model_selector, temperature, top_p, max_new_tokens, request:
             "state": state.dict(),
             "images": all_image_hash,
             "ip": request.client.host,
+            "output": output,
         }
         fout.write(json.dumps(data) + "\n")
+
+
+def get_worker_addr(model_name):
+    controller_url = args.controller_url
+    ret = requests.post(controller_url + "/get_worker_address",
+                        json={"model": model_name})
+    worker_addr = ret.json()["address"]
+    logger.info(f"model_name: {model_name}, worker_addr: {worker_addr}")
+    return worker_addr
 
 
 title_markdown = ("""
@@ -332,89 +423,13 @@ def build_demo(embed_mode):
                 cur_dir = os.path.dirname(os.path.abspath(__file__))
                 gr.Examples(examples=[
                     [f"{cur_dir}/examples/sofa.jpg",
-                     "Question: What category does this product belong to which description is [] ?\r\n\r\n "
-                     "Candidate categories: Pens & Hutches, Trees & Condos, Grooming, Pet Beds & Furniture, Kids Bikes & "
-                     "Riding Toys, Rockers, Swing Sets, Outdoor Sports, Kids Kitchen Playsets, Kids Slides, Soft "
-                     "Play, Beds/Frames & Bases, Benches/Stools, Nightstands, Makeup Vanities, Jewelry "
-                     "Storage, Daybeds, Bedroom Sets, Bedroom "
-                     "Storage, Dressers/Chests/Wardrobes, Sofas, Tables, Chairs/Accent Seating, Bean Bag Chairs/Lazy Sofa "
-                     "Chair, TV/Entertainment Furniture, Indoor Fireplaces, Storage Benches, Trash "
-                     "Cans, Sectionals, Loveseats, Recliners/Massage Chairs, Rocking Chairs, Cabinets, Ottomans, Coat "
-                     "Racks, Display/Shelving/Etageres, Office Chairs, File Cabinets/Storage Cabinets, Desks/Work "
-                     "Surfaces, Safes, Seating for Dining, Kitchen Islands & Carts, Dining and Kitchen Sets, Dining "
-                     "Tables, Servers/Sideboards/Buffets, Table Benches, Youth/Kids/Baby Furniture, Game "
-                     "Tables, Seating/Chairs, Massage Tables, Parts, Mobile Scooters, Winches, Car Roof Tents, Hand Trucks & "
-                     "Dollies, Automotive Interior Coolers, Car Jacks, Vibration Platforms, Elliptical Trainers, Inversion "
-                     "Equipment, Rowers, Trampolines, Step Machines, Treadmills, Exercise Bikes, Fishing Kayaks, Weight "
-                     "Benches, Water sports, Weight Racks, Other Exercise Equipment, Outdoor Bikes, Skateboards, Table "
-                     "Tennis Tables, Gym Mats, Basketball Hoops, Golf Bag Carts, Golf Sets, Inflatable Paddle Boards, Kick "
-                     "Scooters, Soccer Tables, Pool Tables, Christmas Trees, Bathroom Mirrors, Full Length "
-                     "Mirrors, Clocks, Accessories, Rugs, Wall Art, Flowers & Plants, Mattresses, Blankets & Pillows, Bedding "
-                     "Sets, Sheets & Pillowcases, Mattress Protectors, Comforters, Curtains, Privacy Screens, Wine "
-                     "Cellars, Ice Makers, Refrigerators, Kitchen Sinks, Dish Drying Racks, Spice Racks, Kitchen "
-                     "Faucets, Food Sanitizer, Wine Racks, Espresso Machines, Accessories, Dishwashers, Kitchen Range "
-                     "Hoods, Cooktops, Dryers, Bathtubs, Shower Doors, Vanity Sinks, Toilets & Bidets, Saunas, Bathroom Sink "
-                     "Faucets, Freestanding Tub Faucets, Bathroom Storage, Bathroom Accessories, Heat Press Machines, Air "
-                     "Compressors, Display Freezers & Refrigerators, Beauty & Personal Care, Water Fountains, Patio "
-                     "Seating, Patio Furniture Sets, Outdoor Tables, Fences, Umbrellas & Shades, Carports, Outdoor "
-                     "Heating, Grills and Smokers, Garden Carts, Garden Pots & Planters, Garden Arch & Trellis, Pools, Weed "
-                     "Barrier Fabric, Outdoor Generators & Portable Power, Accessories, Vacuums & Floor Cleaning "
-                     "Machines, Air Conditioners, Fans, Home Cleaning, Dryers, Dehumidifiers, Ovens, Office Electronics, Soft "
-                     "Case, Hard Case, Backpacks, Other, Audio Accessories & Musical Instruments, Ventilation Fans, Wire "
-                     "Fencing, Ladders, Tool Boxes, Tool Cabinets, Snow Removal Tools, Skid Steer Auger Drives & "
-                     "Bits, Power & Pneumatic Tools, Blowers, Wall Treatment & Supplies, Doors & Door Hardware, Dining "
-                     "Room Lighting, Bathroom Lighting, Lighting/Lamps, Living Room Lighting, Bedroom Lighting, Outdoor "
-                     "Lighting, Lighting Accessories \r\n\r\n"
-                     "Please judge the category this product image belongs to, and select the result from the "
-                     "candidate categories above.\r\n\r\n"
-                     "Answer:  \r\n\r\n"
-                     "Explanation: Briefly explain the reasoning behind your judged category, e.g. the product's "
-                     "function, shape, materials etc. that are characteristic for that category.Return with follow "
-                     "JSON format {category:XXXX}"],
+                     PROMPT_CATALOG],
                     [f"{cur_dir}/examples/sofa-1.jpg",
-                     "Question: What is the style of this product?\r\n\r\n"
-                     "Candidate style list: [American Design,American Traditional,Antique,Art Deco,Artsy,Beach,Boho,"
-                     "British,Casual,Chinese,Classic,Coastal,Contemporary,Cute,Desert Lodge,European,Exotic,"
-                     "Farmhouse,French,French Country,Glam,Grunge,Industrial,Lodge,Luxury,Mid-Century Modern,"
-                     "Minimalist,Mission,mix match,Modern,Mountain Lodge,Nautical,Ornate Traditional,Pastoral,"
-                     "Primitivism,Retro,Rustic,Scandinavian,Shabby Chic,Southwestern,Sporty,Traditional,Transitional,"
-                     "Tropical,Ultra-Modern,Victorian,Vintage,Wild Style]\r\n\r\n"
-                     "Answer:  \r\n\r\n"
-                     "Based on the image, please judge the most likely style for this product. Return with follow "
-                     "JSON format {style:XXXX}"],
+                     PROMPT_STYLE],
                     [f"{cur_dir}/examples/sofa-2.jpg",
-                     "Question: What is the main color of this product which description is [] ? \r\n\r\n"
-                     "Based on the image, please judge the predominant, obvious main color of this product. Reply "
-                     "with specific color terms like red,blue, etc. rather than descriptions like "
-                     "vibrant or dull."
-                     "If there are multiple colors, choose the color with the largest area proportion.\r\n\r\n"
-                     "Answer: \r\n\r\n"
-                     "Explanation: Briefly explain why you judged this to be the main color, e.g. it occupies the "
-                     "largest area percentage.Return with follow JSON format {color:XXXX}"],
+                     PROMPT_COLOR],
                     [f"{cur_dir}/examples/chair.jpg",
-                     "Question:  What is the main material used for this product which description is [] ?\r\n\r\n"
-                     "Candidate material list: [Acrylic,Altay Velvet,Aluminium,Aluminium Alloy,Aluminum,Bamboo,"
-                     "Bonded Leather,Bone,Boucle,brass,Bronzing cloth,Bronzing suede,Canvas,Carbon fiber,"
-                     "Carbon steel,Ceramic,Chenille,Chrome,Clay,Concrete,Corduroy,Cotton,Cotton Linen,Crystal,"
-                     "Down filling,Epoxy resin adhesive,EPU,Eucalyptus,Fabric,faux fur,Fiberglass,Fireclay,Foam,"
-                     "genuine leather,Glass,HDPE,Horse hair leather,Iron,Kaolinite,Leather,Linen,Maple,marble,MDF,"
-                     "Melamine,Metal,Metal &amp; Wood,Microfiber,Nubuck,Nylon,Nylon Mesh,oxford fabric,"
-                     "Palomino Fabric,Particle Board,PC,PET,Pine,Plastic,Plush,Plywood,Polyester,POLYETHYLENE,"
-                     "Polypropylene,Polyresin,Polyurethane,POLYVINYL CHLORIDE,PU,PU Leather,PVC,Quartz,Rattan,Resin,"
-                     "Rubber,Rubberwood,Sintered Stone,Snowflake Velvet Fabric,Solid Surface,Stainless Steel,Steel,"
-                     "Stone,Suede,Tech cloth,technical leather,Textile,Textilene,Upholstered,Velvet,Vinyl,Wicker,"
-                     "Solid Wood,Wool,zinc,Olefin,Jute,Viscose,Fiberboard,Paper,Crinkle Oil Paper,Shantung,Parchment,"
-                     "Silk,Burlap,Pongee Silk,Taffeta,Dupioni,Grass Cloth,Tissue Shantung,Broadcloth Pleat,Soy wax,"
-                     "Recycled paper,Engineered Wood,Water Hyacinth,Porcelain,Woven Rope,Paper Rope,Terrazzo,"
-                     "Paper Composite,Copper,Acacia Wood,Magnesium Oxide,Tempered Glass,Microsuede,Fur,Mohair,"
-                     "Sheet Metal,Cement,Wood,Sherpa,Polyester Blend,TPU,Engineered Stone,Faux Leather,Cat Scratch "
-                     "Fabric,Teddy,LVL,Fleece,Artificial Marble,Mirror,Synthetic Wood,Mesh,Waterproof Fabric,"
-                     "ABS] \r\n\r\n"
-                     "Based on the function, intended use of this object, please analyze the most matching main "
-                     "material and select from the candidate list. You may infer from materials commonly used for "
-                     "similar function objects.\r\n\r\n"
-                     "Answer:\r\n\r\n"
-                     "Return result with follow JSON format {material:XXXX}"],
+                     PROMPT_MATERIAL],
                 ], inputs=[imagebox, textbox])
 
                 with gr.Accordion("Parameters", open=False) as parameter_row:
